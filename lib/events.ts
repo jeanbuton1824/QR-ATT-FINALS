@@ -54,11 +54,9 @@ export async function getEventsByTeacher(
     .eq('created_by', teacherId)
     .order('created_at', { ascending: false });
 
-  if (error || !data) {
-    return [];
-  }
+  if (error) throw error;
 
-  return data as CloudEvent[];
+  return (data ?? []) as CloudEvent[];
 }
 
 export async function getUpcomingEvents(): Promise<CloudEvent[]> {
@@ -69,6 +67,21 @@ export async function getUpcomingEvents(): Promise<CloudEvent[]> {
     .eq('status', 'open')
     .order('start_time', { ascending: true })
     .limit(5);
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []) as CloudEvent[];
+}
+
+export async function getAvailableEvents(): Promise<CloudEvent[]> {
+  const { data, error } = await supabase
+    .from('events')
+    .select('id, event_code, title, start_time, end_time, venue, description, status, created_by, created_at')
+    .eq('status', 'open')
+    .or(`end_time.is.null,end_time.gte.${new Date().toISOString()}`)
+    .order('start_time', { ascending: true });
 
   if (error) {
     throw error;

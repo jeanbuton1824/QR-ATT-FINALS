@@ -4,6 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -20,6 +21,10 @@ import { getAttendanceHistory, type AttendanceRecord } from '@/lib/attendance';
 import { getUpcomingEvents, type CloudEvent } from '@/lib/events';
 import { getProfile, type Role } from '@/lib/profiles';
 
+type DashboardSelection =
+  | { kind: 'event'; item: CloudEvent }
+  | { kind: 'attendance'; item: AttendanceRecord };
+
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuth();
@@ -30,6 +35,7 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [eventsError, setEventsError] = useState(false);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const [selection, setSelection] = useState<DashboardSelection | null>(null);
 
   const loadDashboard = useCallback(async () => {
     if (!user) {
@@ -182,7 +188,13 @@ export default function HomeScreen() {
                 event.start_time && new Date(event.start_time).getTime() > Date.now()
               );
               return (
-                <View key={event.id} style={styles.eventCard}>
+                <Pressable
+                  key={event.id}
+                  style={({ pressed }) => [styles.eventCard, pressed && styles.cardPressed]}
+                  onPress={() => setSelection({ kind: 'event', item: event })}
+                  accessibilityRole="button"
+                  accessibilityLabel={`View details for ${event.title}`}
+                >
                   <View style={styles.eventIcon}>
                     <Ionicons name="calendar" size={20} color={COLORS.deepPink} />
                   </View>
@@ -200,7 +212,7 @@ export default function HomeScreen() {
                       {isUpcoming ? 'UPCOMING' : 'OPEN'}
                     </Text>
                   </View>
-                </View>
+                </Pressable>
               );
             })
           )}
@@ -216,7 +228,13 @@ export default function HomeScreen() {
           </View>
 
           {records.slice(0, 3).map((record) => (
-            <View key={record.id} style={styles.recordCard}>
+            <Pressable
+              key={record.id}
+              style={({ pressed }) => [styles.recordCard, pressed && styles.cardPressed]}
+              onPress={() => setSelection({ kind: 'attendance', item: record })}
+              accessibilityRole="button"
+              accessibilityLabel={`View attendance details for ${record.eventTitle || 'event'}`}
+            >
               <View style={styles.recordIcon}>
                 <Ionicons name="checkmark" size={18} color={COLORS.success} />
               </View>
@@ -225,7 +243,7 @@ export default function HomeScreen() {
                 <Text style={styles.eventMeta}>{formatDate(record.scannedAt)}</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={COLORS.textSecondary} />
-            </View>
+            </Pressable>
           ))}
           {!loading && records.length === 0 ? (
             <View style={styles.emptyCard}>
@@ -234,6 +252,90 @@ export default function HomeScreen() {
           ) : null}
         </View>
       </ScrollView>
+      <Modal
+        visible={selection !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelection(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setSelection(null)}
+            accessibilityRole="button"
+            accessibilityLabel="Close details"
+          />
+          {selection ? (
+            <View style={styles.detailCard}>
+              <Pressable
+                style={styles.closeButton}
+                onPress={() => setSelection(null)}
+                accessibilityRole="button"
+                accessibilityLabel="Close details"
+              >
+                <Ionicons name="close" size={22} color={COLORS.textSecondary} />
+              </Pressable>
+              <View style={styles.detailIcon}>
+                <Ionicons
+                  name={selection.kind === 'event' ? 'calendar' : 'checkmark'}
+                  size={22}
+                  color={selection.kind === 'event' ? COLORS.deepPink : COLORS.success}
+                />
+              </View>
+              <Text style={styles.detailTitle}>
+                {selection.kind === 'event' ? selection.item.title : selection.item.eventTitle || 'Attendance recorded'}
+              </Text>
+              {selection.kind === 'event' ? (
+                <>
+                  <Text style={styles.detailLabel}>Event code</Text>
+                  <Text style={styles.detailValue}>{selection.item.event_code}</Text>
+                  <Text style={styles.detailLabel}>Status</Text>
+                  <Text style={styles.detailValue}>
+                    {selection.item.start_time && new Date(selection.item.start_time).getTime() > Date.now()
+                      ? 'Upcoming'
+                      : selection.item.status}
+                  </Text>
+                  {selection.item.start_time ? (
+                    <>
+                      <Text style={styles.detailLabel}>Starts</Text>
+                      <Text style={styles.detailValue}>{formatDate(selection.item.start_time)}</Text>
+                    </>
+                  ) : null}
+                  {selection.item.end_time ? (
+                    <>
+                      <Text style={styles.detailLabel}>Ends</Text>
+                      <Text style={styles.detailValue}>{formatDate(selection.item.end_time)}</Text>
+                    </>
+                  ) : null}
+                  {selection.item.venue ? (
+                    <>
+                      <Text style={styles.detailLabel}>Venue</Text>
+                      <Text style={styles.detailValue}>{selection.item.venue}</Text>
+                    </>
+                  ) : null}
+                  {selection.item.description ? (
+                    <>
+                      <Text style={styles.detailLabel}>Description</Text>
+                      <Text style={styles.detailValue}>{selection.item.description}</Text>
+                    </>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <Text style={styles.detailLabel}>Event code</Text>
+                  <Text style={styles.detailValue}>{selection.item.eventId || 'Not available'}</Text>
+                  <Text style={styles.detailLabel}>Checked in</Text>
+                  <Text style={styles.detailValue}>{formatDate(selection.item.scannedAt)}</Text>
+                  <Text style={styles.detailLabel}>Status</Text>
+                  <Text style={styles.detailValue}>
+                    {selection.item.status.charAt(0).toUpperCase() + selection.item.status.slice(1)}
+                  </Text>
+                </>
+              )}
+            </View>
+          ) : null}
+        </View>
+      </Modal>
       </SafeAreaView>
     </CampusBackground>
   );
@@ -392,6 +494,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
+  cardPressed: { opacity: 0.82 },
   eventIcon: { width: 42, height: 42, borderRadius: 14, backgroundColor: COLORS.softPink, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
   eventCopy: { flex: 1 },
   eventTitle: { color: COLORS.textPrimary, fontSize: 14, fontWeight: '700' },
@@ -412,4 +515,35 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
   },
   recordIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: '#E8F7ED', alignItems: 'center', justifyContent: 'center', marginRight: 11 },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 24,
+    backgroundColor: 'rgba(28,18,36,0.5)',
+  },
+  detailCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    shadowColor: COLORS.shadow,
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+  closeButton: { alignSelf: 'flex-end', padding: 4 },
+  detailIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 15,
+    backgroundColor: COLORS.softPink,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  detailTitle: { color: COLORS.textPrimary, fontSize: 18, fontWeight: '800', marginBottom: 10 },
+  detailLabel: { color: COLORS.textSecondary, fontSize: 12, fontWeight: '700', marginTop: 9 },
+  detailValue: { color: COLORS.textPrimary, fontSize: 14, lineHeight: 20, marginTop: 2 },
 });

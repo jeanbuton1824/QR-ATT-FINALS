@@ -1,3 +1,4 @@
+
 {
   "expo": {
     "name": "QR-ATT",
@@ -7,7 +8,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "qr-attendance",
     "userInterfaceStyle": "light",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
     },
@@ -23,8 +24,8 @@
       "package": "com.jeanmaicabuton.QRATT"
     },
     "androidNavigationBar": {
-      "backgroundColor": "transparent",
-      "barStyle": "light-content",
+      "backgroundColor": "#FDF2F8",
+      "barStyle": "dark-content",
       "enforceContrast": false
     },
     "web": {

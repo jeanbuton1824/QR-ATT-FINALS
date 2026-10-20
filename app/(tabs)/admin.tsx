@@ -1,13 +1,9 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import DateTimePicker, {
-  type DateTimePickerEvent,
-} from '@react-native-community/datetimepicker';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
-  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -16,8 +12,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import QRCode from 'react-native-qrcode-svg';
-
 import AppButton from '@/components/AppButton';
 import CampusBackground from '@/components/CampusBackground';
 import ScreenHeader from '@/components/ScreenHeader';
@@ -30,13 +24,10 @@ import {
   type AdminDashboardData,
   type AdminProfile,
 } from '@/lib/admin';
-import { closeEvent, createEvent, updateEvent } from '@/lib/events';
 import { getProfile, type Role } from '@/lib/profiles';
-import { buildQRPayload } from '@/lib/qr';
 import { supabase } from '@/lib/supabase';
 
 type UserFilter = 'all' | 'student' | 'teacher' | 'admin';
-type EventDateField = 'start' | 'end';
 
 export default function AdminScreen() {
   const { user } = useAuth();
@@ -48,22 +39,6 @@ export default function AdminScreen() {
   const [liveUpdateError, setLiveUpdateError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [userFilter, setUserFilter] = useState<UserFilter>('all');
-  const [eventTitle, setEventTitle] = useState('');
-  const [eventCode, setEventCode] = useState('');
-  const [eventVenue, setEventVenue] = useState('');
-  const [eventDescription, setEventDescription] = useState('');
-  const [editingEventId, setEditingEventId] = useState<string | null>(null);
-  const [eventStart, setEventStart] = useState(() => new Date());
-  const [eventEnd, setEventEnd] = useState(() => new Date(Date.now() + 60 * 60 * 1000));
-  const [dateTarget, setDateTarget] = useState<{
-    field: EventDateField;
-    mode: 'date' | 'time';
-  } | null>(null);
-  const [creatingEvent, setCreatingEvent] = useState(false);
-  const [eventMessage, setEventMessage] = useState<string | null>(null);
-  const [eventMessageError, setEventMessageError] = useState(false);
-  const [qrPayload, setQrPayload] = useState<string | null>(null);
-  const [qrEventCode, setQrEventCode] = useState<string | null>(null);
   const [correctionId, setCorrectionId] = useState<string | null>(null);
   const [correctionReason, setCorrectionReason] = useState('');
   const [correctionMessage, setCorrectionMessage] = useState<string | null>(null);
@@ -145,155 +120,6 @@ export default function AdminScreen() {
     });
   }, [data?.users, query, userFilter]);
 
-  const visibleEvents = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return (data?.events ?? []).filter((event) =>
-      `${event.title} ${event.event_code}`.toLowerCase().includes(normalizedQuery)
-    );
-  }, [data?.events, query]);
-
-  const setEventDate = (field: EventDateField, date: Date) => {
-    if (field === 'start') setEventStart(date);
-    else setEventEnd(date);
-  };
-
-  const handleDateChange = (event: DateTimePickerEvent, selected?: Date) => {
-    if (!dateTarget) return;
-    if (event.type === 'dismissed' || !selected) {
-      setDateTarget(null);
-      return;
-    }
-
-    const current = dateTarget.field === 'start' ? eventStart : eventEnd;
-    const next = new Date(current);
-    if (Platform.OS === 'android' && dateTarget.mode === 'date') {
-      next.setFullYear(selected.getFullYear(), selected.getMonth(), selected.getDate());
-      setEventDate(dateTarget.field, next);
-      setDateTarget({ field: dateTarget.field, mode: 'time' });
-      return;
-    }
-
-    if (Platform.OS === 'android') {
-      next.setHours(selected.getHours(), selected.getMinutes(), 0, 0);
-    } else {
-      next.setTime(selected.getTime());
-    }
-    setEventDate(dateTarget.field, next);
-    setDateTarget(null);
-  };
-
-  const handleCreateEvent = async () => {
-    const title = eventTitle.trim();
-    const code = eventCode.trim();
-    if (!title || !code) {
-      setEventMessageError(true);
-      setEventMessage('Enter both an event title and a unique event code.');
-      return;
-    }
-    if (eventEnd.getTime() <= eventStart.getTime()) {
-      setEventMessageError(true);
-      setEventMessage('The event end time must be after the start time.');
-      return;
-    }
-
-    setCreatingEvent(true);
-    setEventMessage(null);
-    setEventMessageError(false);
-    try {
-      const start = toLocalISO(eventStart);
-      const end = toLocalISO(eventEnd);
-      const eventInput = {
-        eventId: code,
-        title,
-        start,
-        end,
-        venue: eventVenue.trim(),
-        description: eventDescription.trim(),
-      };
-      const result = editingEventId
-        ? await updateEvent(editingEventId, eventInput)
-        : await createEvent(eventInput);
-      if (result.error) {
-        setEventMessageError(true);
-        setEventMessage(
-          result.error.toLowerCase().includes('duplicate') ||
-            result.error.includes('23505')
-            ? 'That event code already exists. Choose a different code.'
-            : `Could not create event: ${result.error}`
-        );
-        return;
-      }
-
-      setQrPayload(buildQRPayload({ event: code, title, start, end }));
-      setQrEventCode(code);
-      setEventMessageError(false);
-      setEventMessage(editingEventId
-        ? 'Event updated successfully.'
-        : 'Event created successfully. Its QR code is ready below.');
-      setEventTitle('');
-      setEventCode('');
-      setEventVenue('');
-      setEventDescription('');
-      setEditingEventId(null);
-      await load(true);
-    } catch (createError) {
-      setEventMessageError(true);
-      setEventMessage(
-        createError instanceof Error
-          ? `Could not create event: ${createError.message}`
-          : 'Could not create event. Please try again.'
-      );
-    } finally {
-      setCreatingEvent(false);
-    }
-  };
-
-  const handleEditEvent = (eventId: string) => {
-    const event = data?.events.find((item) => item.id === eventId);
-    if (!event) return;
-    setEditingEventId(event.id);
-    setEventTitle(event.title);
-    setEventCode(event.event_code);
-    setEventVenue(event.venue ?? '');
-    setEventDescription(event.description ?? '');
-    setEventStart(event.start_time ? new Date(event.start_time) : new Date());
-    setEventEnd(event.end_time ? new Date(event.end_time) : new Date(Date.now() + 60 * 60 * 1000));
-    setQrPayload(null);
-    setEventMessageError(false);
-    setEventMessage(`Editing ${event.title}. Save your changes below.`);
-  };
-
-  const cancelEventEdit = () => {
-    setEditingEventId(null);
-    setEventTitle('');
-    setEventCode('');
-    setEventVenue('');
-    setEventDescription('');
-    setEventMessage(null);
-    setEventMessageError(false);
-  };
-
-  const handleCloseEvent = (eventId: string, title: string) => {
-    Alert.alert(
-      'Close event?',
-      `Students will no longer be able to check in to ${title}.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Close event',
-          style: 'destructive',
-          onPress: () => {
-            closeEvent(eventId)
-              .then(() => load(true))
-              .catch((closeError: unknown) => {
-                setError(closeError instanceof Error ? closeError.message : 'Could not close event.');
-              });
-          },
-        },
-      ]
-    );
-  };
-
   const handleAttendanceCorrection = async () => {
     if (!correctionId || correctionReason.trim().length < 5) {
       setCorrectionMessage('Enter a reason of at least 5 characters.');
@@ -363,7 +189,7 @@ export default function AdminScreen() {
       <CampusBackground>
         <View style={styles.page}>
         <ScreenHeader
-          title="Administrator"
+          title="Records & reports"
           subtitle="Restricted system management"
           icon="shield-checkmark-outline"
         />
@@ -383,7 +209,7 @@ export default function AdminScreen() {
     <CampusBackground>
       <View style={styles.page}>
         <ScreenHeader
-          title="Administrator"
+          title="Records & reports"
         
           icon="shield-checkmark"
         />
@@ -404,7 +230,9 @@ export default function AdminScreen() {
             </View>
             <View style={styles.welcomeCopy}>
               <Text style={styles.sectionTitle}>System overview</Text>
-              <Text style={styles.sectionSubtitle}>Live totals from your attendance database</Text>
+              <Text style={styles.sectionSubtitle}>
+                A quick overview of users, events, and attendance activity
+              </Text>
             </View>
             <Pressable
               accessibilityRole="button"
@@ -507,161 +335,7 @@ export default function AdminScreen() {
             ) : null}
 
             <SectionTitle
-              title="Event management"
-              subtitle={`${data.totals.events} events · latest 100`}
-              icon="calendar-outline"
-            />
-            <View style={styles.createEventCard}>
-              <Text style={styles.createEventTitle}>
-                {editingEventId ? 'Edit event' : 'Create an event'}
-              </Text>
-              <Text style={styles.createEventSubtitle}>
-                Add an event and generate its attendance QR code.
-              </Text>
-              <Text style={styles.fieldLabel}>Event title</Text>
-              <TextInput
-                style={styles.eventInput}
-                value={eventTitle}
-                onChangeText={setEventTitle}
-                placeholder="e.g. Campus orientation"
-                placeholderTextColor={COLORS.textSecondary}
-                editable={!creatingEvent}
-              />
-              <Text style={styles.fieldLabel}>Unique event code</Text>
-              <TextInput
-                style={styles.eventInput}
-                value={eventCode}
-                onChangeText={(value) => setEventCode(value.trim().toUpperCase())}
-                placeholder="e.g. EVT-2026-001"
-                placeholderTextColor={COLORS.textSecondary}
-                autoCapitalize="characters"
-                editable={!creatingEvent}
-              />
-              <Text style={styles.fieldLabel}>Venue</Text>
-              <TextInput
-                style={styles.eventInput}
-                value={eventVenue}
-                onChangeText={setEventVenue}
-                placeholder="e.g. Main auditorium"
-                placeholderTextColor={COLORS.textSecondary}
-                editable={!creatingEvent}
-              />
-              <Text style={styles.fieldLabel}>Description</Text>
-              <TextInput
-                style={[styles.eventInput, styles.descriptionInput]}
-                value={eventDescription}
-                onChangeText={setEventDescription}
-                placeholder="Event details"
-                placeholderTextColor={COLORS.textSecondary}
-                editable={!creatingEvent}
-                multiline
-                textAlignVertical="top"
-              />
-              {Platform.OS === 'web' ? (
-                <>
-                  <Text style={styles.fieldLabel}>Starts</Text>
-                  <DateInput value={eventStart} onChange={setEventStart} />
-                  <Text style={styles.fieldLabel}>Ends</Text>
-                  <DateInput value={eventEnd} onChange={setEventEnd} />
-                </>
-              ) : (
-                <>
-                  <Text style={styles.fieldLabel}>Starts</Text>
-                  <DateField
-                    value={eventStart}
-                    onPress={() => setDateTarget({ field: 'start', mode: 'date' })}
-                  />
-                  <Text style={styles.fieldLabel}>Ends</Text>
-                  <DateField
-                    value={eventEnd}
-                    onPress={() => setDateTarget({ field: 'end', mode: 'date' })}
-                  />
-                </>
-              )}
-              {eventMessage ? (
-                <Text style={[styles.eventMessage, eventMessageError && styles.eventError]}>
-                  {eventMessage}
-                </Text>
-              ) : null}
-              <AppButton
-                theme="primary"
-                title={editingEventId ? 'Save Changes' : 'Create Event'}
-                icon={editingEventId ? 'checkmark-circle-outline' : 'add-circle-outline'}
-                onPress={handleCreateEvent}
-                loading={creatingEvent}
-                disabled={creatingEvent}
-              />
-              {editingEventId ? (
-                <Pressable style={styles.cancelEventEdit} onPress={cancelEventEdit}>
-                  <Text style={styles.cancelEventEditText}>Cancel editing</Text>
-                </Pressable>
-              ) : null}
-              {dateTarget && Platform.OS !== 'web' ? (
-                <DateTimePicker
-                  value={dateTarget.field === 'start' ? eventStart : eventEnd}
-                  mode={Platform.OS === 'android' ? dateTarget.mode : 'datetime'}
-                  display={Platform.OS === 'android' ? 'default' : 'spinner'}
-                  onChange={handleDateChange}
-                />
-              ) : null}
-              {qrPayload ? (
-                <View style={styles.qrCard}>
-                  <Text style={styles.qrTitle}>Event QR code</Text>
-                  <Text style={styles.qrSubtitle}>
-                    Keep the QR on a white background for reliable scanning.
-                  </Text>
-                  <View style={styles.qrBox}>
-                    <QRCode value={qrPayload} size={190} />
-                  </View>
-                  <Text style={styles.qrCodeText}>{qrEventCode}</Text>
-                </View>
-              ) : null}
-            </View>
-            {visibleEvents.length === 0 ? (
-              <EmptyPanel text="No events match this search." />
-            ) : (
-              visibleEvents.slice(0, 30).map((event) => (
-                <View key={event.id} style={styles.eventCard}>
-                  <View style={styles.eventIcon}>
-                    <Ionicons name="calendar" size={18} color={COLORS.deepPink} />
-                  </View>
-                  <View style={styles.eventCopy}>
-                    <Text style={styles.cardTitle}>{event.title}</Text>
-                    <Text style={styles.cardMeta}>{event.event_code}</Text>
-                    <Text style={styles.cardMeta}>
-                      {event.start_time ? formatDate(event.start_time) : 'Date not set'}
-                    </Text>
-                    {event.venue ? <Text style={styles.cardMeta}>Venue: {event.venue}</Text> : null}
-                  </View>
-                  <StatusBadge
-                    start={event.start_time}
-                    end={event.end_time}
-                    status={event.status}
-                  />
-                  <Pressable
-                    style={styles.closeEventButton}
-                    onPress={() => handleEditEvent(event.id)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Edit ${event.title}`}
-                  >
-                    <Ionicons name="create-outline" size={18} color={COLORS.deepPurple} />
-                  </Pressable>
-                  {event.status !== 'closed' ? (
-                    <Pressable
-                      style={styles.closeEventButton}
-                      onPress={() => handleCloseEvent(event.id, event.title)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Close ${event.title}`}
-                    >
-                      <Ionicons name="close-circle-outline" size={18} color={COLORS.danger} />
-                    </Pressable>
-                  ) : null}
-                </View>
-              ))
-            )}
-
-            <SectionTitle
-              title="Attendance monitoring"
+              title="Records & reports"
               subtitle={`${data.totals.attendance} check-ins · latest 100`}
               icon="pulse-outline"
             />
@@ -890,44 +564,6 @@ function UserCard({
   );
 }
 
-function StatusBadge({
-  start,
-  end,
-  status: storedStatus,
-}: {
-  start: string | null;
-  end: string | null;
-  status: 'draft' | 'open' | 'closed';
-}) {
-  const now = Date.now();
-  const startTime = start ? new Date(start).getTime() : null;
-  const endTime = end ? new Date(end).getTime() : null;
-  const status = storedStatus === 'closed'
-    ? 'Closed'
-    : storedStatus === 'draft'
-      ? 'Draft'
-      : endTime !== null && endTime < now
-    ? 'Closed'
-    : startTime !== null && startTime > now
-      ? 'Upcoming'
-      : 'Open';
-  const badgeStyle = status === 'Open'
-    ? styles.openBadge
-    : status === 'Upcoming'
-      ? styles.upcomingBadge
-      : styles.closedBadge;
-  const textStyle = status === 'Open'
-    ? styles.openBadgeText
-    : status === 'Upcoming'
-      ? styles.upcomingBadgeText
-      : styles.closedBadgeText;
-  return (
-    <View style={[styles.statusBadge, badgeStyle]}>
-      <Text style={[styles.statusText, textStyle]}>{status}</Text>
-    </View>
-  );
-}
-
 function EmptyPanel({ text }: { text: string }) {
   return (
     <View style={styles.emptyPanel}>
@@ -950,55 +586,6 @@ function formatDate(iso: string) {
     minute: '2-digit',
   });
 }
-
-function toLocalISO(date: Date) {
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:00`;
-}
-
-function toInputDateTimeValue(date: Date) {
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function DateField({ value, onPress }: { value: Date; onPress: () => void }) {
-  return (
-    <Pressable style={styles.dateField} onPress={onPress} accessibilityRole="button">
-      <Ionicons name="calendar-outline" size={17} color={COLORS.deepPurple} />
-      <Text style={styles.dateFieldText}>{formatDate(value.toISOString())}</Text>
-      <Ionicons name="chevron-down" size={16} color={COLORS.textSecondary} />
-    </Pressable>
-  );
-}
-
-function DateInput({ value, onChange }: { value: Date; onChange: (date: Date) => void }) {
-  return (
-    <View style={styles.dateField}>
-      <Ionicons name="calendar-outline" size={17} color={COLORS.deepPurple} />
-      <input
-        type="datetime-local"
-        value={toInputDateTimeValue(value)}
-        onChange={(event) => {
-          const date = new Date(event.currentTarget.value);
-          if (!Number.isNaN(date.getTime())) onChange(date);
-        }}
-        style={webDateInputStyle}
-      />
-    </View>
-  );
-}
-
-const webDateInputStyle = {
-  flex: 1,
-  marginLeft: 9,
-  fontSize: 13,
-  color: COLORS.textPrimary,
-  background: 'transparent',
-  border: 'none',
-  outline: 'none',
-  padding: 0,
-  fontFamily: 'inherit',
-};
 
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: 'transparent' },
@@ -1049,19 +636,6 @@ const styles = StyleSheet.create({
   cardMeta: { color: COLORS.textSecondary, fontSize: 10, marginTop: 3 },
   roleBadge: { paddingVertical: 5, paddingHorizontal: 9, borderRadius: 99 },
   roleBadgeText: { fontSize: 9, fontWeight: '800' },
-  eventCard: { flexDirection: 'row', alignItems: 'center', padding: 13, borderRadius: 17, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: COLORS.border, marginBottom: 8 },
-  closeEventButton: { width: 34, height: 36, alignItems: 'center', justifyContent: 'center', marginLeft: 3 },
-  cancelEventEdit: { paddingVertical: 11, alignItems: 'center' },
-  cancelEventEditText: { color: COLORS.textSecondary, fontSize: 12, fontWeight: '700' },
-  eventIcon: { width: 37, height: 37, borderRadius: 13, backgroundColor: COLORS.softPink, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
-  statusBadge: { borderRadius: 99, paddingVertical: 5, paddingHorizontal: 8, marginLeft: 6 },
-  statusText: { fontSize: 9, fontWeight: '800' },
-  openBadge: { backgroundColor: '#E8F7ED' },
-  openBadgeText: { color: COLORS.success },
-  upcomingBadge: { backgroundColor: COLORS.lavender },
-  upcomingBadgeText: { color: COLORS.deepPurple },
-  closedBadge: { backgroundColor: '#F1EFF3' },
-  closedBadgeText: { color: COLORS.textSecondary },
   attendanceCard: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', padding: 12, backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: COLORS.border, marginBottom: 8 },
   correctionToggle: { minWidth: 40, minHeight: 40, alignItems: 'center', justifyContent: 'center' },
   correctionForm: { flexBasis: '100%', paddingLeft: 44, paddingTop: 6 },
@@ -1071,19 +645,8 @@ const styles = StyleSheet.create({
   listNote: { color: COLORS.textSecondary, fontSize: 10, textAlign: 'center', marginBottom: 8 },
   notice: { flexDirection: 'row', alignItems: 'flex-start', backgroundColor: COLORS.surface, borderRadius: 15, padding: 12, marginTop: 10 },
   noticeText: { flex: 1, color: COLORS.textSecondary, fontSize: 10, lineHeight: 15, marginLeft: 8 },
-  createEventCard: { padding: 16, backgroundColor: '#FFFFFF', borderRadius: 18, borderWidth: 1, borderColor: COLORS.border, marginBottom: 14 },
-  createEventTitle: { color: COLORS.textPrimary, fontSize: 15, fontWeight: '800' },
-  createEventSubtitle: { color: COLORS.textSecondary, fontSize: 11, lineHeight: 16, marginTop: 4, marginBottom: 8 },
   fieldLabel: { color: COLORS.textPrimary, fontSize: 11, fontWeight: '700', marginTop: 8, marginBottom: 5 },
   eventInput: { minHeight: 44, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, backgroundColor: '#FFFBFE', color: COLORS.textPrimary, fontSize: 13 },
-  descriptionInput: { minHeight: 76, paddingTop: 11 },
-  dateField: { minHeight: 44, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, backgroundColor: '#FFFBFE' },
-  dateFieldText: { flex: 1, color: COLORS.textPrimary, fontSize: 12, marginHorizontal: 9 },
   eventMessage: { color: COLORS.success, fontSize: 11, lineHeight: 16, marginTop: 10, marginBottom: 4 },
   eventError: { color: COLORS.danger },
-  qrCard: { alignItems: 'center', borderTopWidth: 1, borderTopColor: COLORS.border, marginTop: 8, paddingTop: 16 },
-  qrTitle: { color: COLORS.textPrimary, fontSize: 14, fontWeight: '800' },
-  qrSubtitle: { color: COLORS.textSecondary, fontSize: 10, textAlign: 'center', marginTop: 4, marginBottom: 12 },
-  qrBox: { backgroundColor: '#FFFFFF', padding: 17, borderRadius: 15, borderWidth: 1, borderColor: '#EEEAF2' },
-  qrCodeText: { color: COLORS.deepPurple, fontSize: 11, fontWeight: '800', marginTop: 10 },
 });

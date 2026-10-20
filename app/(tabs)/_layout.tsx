@@ -9,11 +9,8 @@ import { getProfile, useProfileRole } from '@/lib/profiles';
 
 const TAB_THEME = {
   active: '#D95798',
-  inactive: '#94798B',
-  bar: '#FFF9FC',
-  border: '#F4D8E7',
+  inactive: '#63465F',
   selectedIcon: '#FCE4F0',
-  shadow: '#D95798',
 } as const;
 
 export default function TabLayout() {
@@ -51,21 +48,16 @@ export default function TabLayout() {
         tabBarItemStyle: styles.item,
         tabBarStyle: [
           styles.bar,
-          {
-            backgroundColor: TAB_THEME.bar,
-            borderColor: TAB_THEME.border,
-            shadowColor: TAB_THEME.shadow,
-          },
         ],
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
-          title: role === 'admin' ?  'Home' : 'Dashboard',
+          title: 'Home',
           tabBarIcon: ({ color, focused }) => (
             <TabIcon
-              name="home-outline"
+              name="home"
               color={color}
               focused={focused}
               selectedBackground={TAB_THEME.selectedIcon}
@@ -76,11 +68,11 @@ export default function TabLayout() {
       <Tabs.Screen
         name="history"
         options={{
-          title: role === 'teacher' ? 'Attendance' : 'History',
+          title: role === 'teacher' ? 'Records' : 'History',
           href: '/history',
           tabBarIcon: ({ color, focused }) => (
             <TabIcon
-              name="time-outline"
+              name="time"
               color={color}
               focused={focused}
               selectedBackground={TAB_THEME.selectedIcon}
@@ -103,20 +95,20 @@ export default function TabLayout() {
       <Tabs.Screen
         name="events"
         options={{
-          title: role === 'admin' ? 'Events' : 'Create events',
+          title: 'Events',
           tabBarLabelStyle: [
             styles.label,
             (role === 'admin' || role === 'teacher') && styles.adminEventsLabel,
           ],
-          href: role === 'student' || role === 'teacher' || role === 'admin'
+          href: role === 'student' || role === 'admin'
             ? '/events'
             : null,
           tabBarIcon: ({ color, focused }) =>
-            role === 'admin' || role === 'teacher' ? (
+            role === 'admin' ? (
               <AdminEventsTabIcon />
             ) : (
               <TabIcon
-                name="calendar-outline"
+                name="calendar"
                 color={color}
                 focused={focused}
                 selectedBackground={TAB_THEME.selectedIcon}
@@ -135,7 +127,7 @@ export default function TabLayout() {
               : null,
           tabBarIcon: ({ color, focused }) => (
             <TabIcon
-              name="briefcase-outline"
+              name="briefcase"
               color={color}
               focused={focused}
               selectedBackground={TAB_THEME.selectedIcon}
@@ -148,11 +140,11 @@ export default function TabLayout() {
       <Tabs.Screen
         name="admin"
         options={{
-          title: 'Reports',
+          title: 'Records',
           href: role === 'admin' ? '/admin' : null,
           tabBarIcon: ({ color, focused }) => (
             <TabIcon
-              name="shield-checkmark-outline"
+              name="shield-checkmark"
               color={color}
               focused={focused}
               selectedBackground={TAB_THEME.selectedIcon}
@@ -167,7 +159,7 @@ export default function TabLayout() {
           title: 'Profile',
           tabBarIcon: ({ color, focused }) => (
             <TabIcon
-              name="person-outline"
+              name="person"
               color={color}
               focused={focused}
               selectedBackground={TAB_THEME.selectedIcon}
@@ -371,25 +363,27 @@ function TabIcon({
         focused && { backgroundColor: selectedBackground },
       ]}
     >
-      <Ionicons name={name} color={color} size={22} />
+      <Ionicons name={name} color={color} size={26} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   bar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 7,
     height: 72,
     marginHorizontal: 12,
-    marginBottom: 7,
     paddingTop: 8,
     paddingBottom: 4,
-    borderTopWidth: 1,
-    borderWidth: 1,
+    backgroundColor: 'transparent',
+    borderTopWidth: 0,
+    borderWidth: 0,
     borderRadius: 23,
-    elevation: 13,
-    shadowOpacity: 0.16,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 5 },
+    elevation: 0,
+    shadowOpacity: 0,
   },
   item: {
     paddingTop: 1,
@@ -403,8 +397,8 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   iconWrap: {
-    width: 42,
-    height: 31,
+    width: 44,
+    height: 34,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 13,

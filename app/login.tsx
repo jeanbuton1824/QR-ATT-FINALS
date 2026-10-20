@@ -148,7 +148,7 @@ export default function LoginScreen() {
             </Pressable>
 
             <Text style={styles.footerText}>
-              New to QR-ATT? <Link href="/register" style={styles.link}>Create an account</Link>
+              Don't have an account? <Link href="/register" style={styles.link}>Create an account</Link>
             </Text>
           </View>
         </ScrollView>

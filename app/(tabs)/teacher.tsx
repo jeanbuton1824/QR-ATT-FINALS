@@ -2,7 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
   Alert,
@@ -21,8 +21,13 @@ import CampusBackground from '@/components/CampusBackground';
 import ScreenHeader from '@/components/ScreenHeader';
 import { COLORS } from '@/constants/colors';
 import { useAuth } from '@/lib/auth';
-import { closeEvent, createEvent, updateEvent } from '@/lib/events';
-import { getTeacherEventAttendance, type TeacherEventAttendance } from '@/lib/attendance';
+import {
+  closeEvent,
+  createEvent,
+  getEventsByTeacher,
+  type CloudEvent,
+  updateEvent,
+} from '@/lib/events';
 import { getProfile, type Role } from '@/lib/profiles';
 import { buildQRPayload } from '@/lib/qr';
 
@@ -65,14 +70,16 @@ type EditTarget = 'start' | 'end';
 
 export default function TeacherScreen() {
   const { user } = useAuth();
-  const router = useRouter();
   const [role, setRole] = useState<Role | null>(null);
   const [roleLoading, setRoleLoading] = useState(true);
+  const [teacherEvents, setTeacherEvents] = useState<CloudEvent[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [title, setTitle] = useState('');
   const [eventId, setEventId] = useState('');
   const [venue, setVenue] = useState('');
   const [description, setDescription] = useState('');
-  const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [startDate, setStartDate] = useState(() => new Date());
   const [endDate, setEndDate] = useState(
     () => new Date(Date.now() + 60 * 60 * 1000)
@@ -81,9 +88,18 @@ export default function TeacherScreen() {
   const [editingPart, setEditingPart] = useState<'date' | 'time'>('date');
   const [payload, setPayload] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [teacherEvents, setTeacherEvents] = useState<TeacherEventAttendance[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
   const isAndroid = Platform.OS === 'android';
+
+  const loadTeacherEvents = useCallback(async (teacherId: string) => {
+    setEventsLoading(true);
+    try {
+      setTeacherEvents(await getEventsByTeacher(teacherId));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to load your events.');
+    } finally {
+      setEventsLoading(false);
+    }
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -94,22 +110,38 @@ export default function TeacherScreen() {
           active = false;
         };
       }
-      getProfile(user.id).then(async (profile: { role: Role } | null) => {
-        if (!active) return;
-        setRole(profile?.role ?? 'student');
-        if (profile?.role === 'teacher') {
-          setTeacherEvents(await getTeacherEventAttendance(user.id));
+      const loadRoleAndEvents = async () => {
+        try {
+          const profile = await getProfile(user.id);
+          if (!active) return;
+          const currentRole = profile?.role ?? 'student';
+          setRole(currentRole);
+          if (currentRole === 'teacher') {
+            setEventsLoading(true);
+            try {
+              const loadedEvents = await getEventsByTeacher(user.id);
+              if (active) setTeacherEvents(loadedEvents);
+            } catch (error) {
+              if (active) {
+                setMessage(error instanceof Error ? error.message : 'Unable to load your events.');
+              }
+            } finally {
+              if (active) setEventsLoading(false);
+            }
+          }
+        } catch (error) {
+          if (active) {
+            setMessage(error instanceof Error ? error.message : 'Unable to load teacher access.');
+          }
+        } finally {
+          if (active) setRoleLoading(false);
         }
-        setRoleLoading(false);
-      }).catch((error: unknown) => {
-        if (!active) return;
-        setMessage(error instanceof Error ? error.message : 'Unable to load teacher access.');
-        setRoleLoading(false);
-      });
+      };
+      void loadRoleAndEvents();
       return () => {
         active = false;
       };
-    }, [user])
+    }, [loadTeacherEvents, user])
   );
 
   if (roleLoading) {
@@ -240,12 +272,14 @@ export default function TeacherScreen() {
       setMessage('End time must be after start time.');
       return;
     }
+    setSaving(true);
     try {
-      const { error } = editingEventId
+      const result = editingEventId
         ? await updateEvent(editingEventId, event)
         : await createEvent(event);
+      const { error } = result;
       if (error) {
-        setMessage(`Could not save the event: ${error}`);
+        setMessage(`Could not ${editingEventId ? 'update' : 'save'} the event: ${error}`);
         return;
       }
       setMessage(editingEventId ? 'Event updated successfully.' : 'Event created. Its QR code is ready below.');
@@ -260,22 +294,24 @@ export default function TeacherScreen() {
       setVenue('');
       setDescription('');
       setEditingEventId(null);
-      if (user) setTeacherEvents(await getTeacherEventAttendance(user.id));
+      if (user) await loadTeacherEvents(user.id);
     } catch (error: unknown) {
       setMessage(error instanceof Error ? error.message : 'Could not save the event.');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleEditEvent = (event: TeacherEventAttendance) => {
-    setEditingEventId(event.eventId);
+  const handleEditEvent = (event: CloudEvent) => {
+    setEditingEventId(event.id);
     setTitle(event.title);
-    setEventId(event.eventCode);
+    setEventId(event.event_code);
     setVenue(event.venue ?? '');
     setDescription(event.description ?? '');
-    setStartDate(event.startTime ? new Date(event.startTime) : new Date());
-    setEndDate(event.endTime ? new Date(event.endTime) : new Date(Date.now() + 60 * 60 * 1000));
+    setStartDate(event.start_time ? new Date(event.start_time) : new Date());
+    setEndDate(event.end_time ? new Date(event.end_time) : new Date(Date.now() + 60 * 60 * 1000));
     setPayload(null);
-    setMessage(`Editing ${event.title}. Save your changes below.`);
+    setMessage(`Editing ${event.title}.`);
   };
 
   const cancelEdit = () => {
@@ -284,25 +320,28 @@ export default function TeacherScreen() {
     setEventId('');
     setVenue('');
     setDescription('');
-    setMessage(null);
+    setStartDate(new Date());
+    setEndDate(new Date(Date.now() + 60 * 60 * 1000));
+    setMessage('Event editing cancelled.');
   };
 
-  const handleCloseEvent = (event: TeacherEventAttendance) => {
+  const handleCloseEvent = (event: CloudEvent) => {
     Alert.alert(
       'Close event?',
-      `Students will no longer be able to check in to ${event.title}.`,
+      `Close "${event.title}"? Students will no longer be able to check in.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Close event',
           style: 'destructive',
           onPress: () => {
-            closeEvent(event.eventId)
+            closeEvent(event.id)
               .then(async () => {
-                if (user) setTeacherEvents(await getTeacherEventAttendance(user.id));
+                setMessage(`${event.title} is now closed.`);
+                if (user) await loadTeacherEvents(user.id);
               })
               .catch((error: unknown) => {
-                setMessage(error instanceof Error ? error.message : 'Could not close the event.');
+                setMessage(error instanceof Error ? error.message : 'Unable to close the event.');
               });
           },
         },
@@ -319,148 +358,15 @@ export default function TeacherScreen() {
       >
       <View style={styles.headerWrapper}>
         <ScreenHeader
-          title="Teacher workspace"
-          subtitle="Manage events and attendance"
-          icon="briefcase-outline"
+          title=" Events"
+          subtitle="Set event details, date, and time"
+          icon="calendar-outline"
         />
-      </View>
-      <View style={styles.dashboardStats}>
-        <View style={styles.dashboardStat}>
-          <Text style={styles.dashboardStatValue}>{teacherEvents.length}</Text>
-          <Text style={styles.dashboardStatLabel}>Total events</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.dashboardStat}>
-          <Text style={styles.dashboardStatValue}>
-            {teacherEvents.filter((event) => getEventStatus(event) === 'Open').length}
-          </Text>
-          <Text style={styles.dashboardStatLabel}>Open now</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.dashboardStat}>
-          <Text style={styles.dashboardStatValue}>
-            {teacherEvents.reduce((total, event) => total + event.attendeeCount, 0)}
-          </Text>
-          <Text style={styles.dashboardStatLabel}>Check-ins</Text>
-        </View>
       </View>
       <View style={styles.sectionHeader}>
         <View>
-          <Text style={styles.sectionTitle}>Your events</Text>
-          <Text style={styles.sectionSubtitle}>Search and manage check-ins</Text>
-        </View>
-        <Ionicons name="calendar-outline" size={21} color={COLORS.deepPurple} />
-      </View>
-      <View style={styles.searchBox}>
-        <Ionicons name="search-outline" size={18} color={COLORS.textSecondary} />
-        <TextInput
-          style={styles.searchInput}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          placeholder="Search events"
-          placeholderTextColor={COLORS.textSecondary}
-          accessibilityLabel="Search events"
-        />
-      </View>
-      {teacherEvents
-        .filter((event) =>
-          `${event.title} ${event.eventCode}`.toLowerCase().includes(searchQuery.trim().toLowerCase())
-        )
-        .map((event) => {
-          const status = getEventStatus(event);
-          return (
-            <View key={event.eventId} style={styles.eventCard}>
-              <View style={styles.eventCardTop}>
-                <View style={styles.eventGlyph}>
-                  <Ionicons name="calendar" size={19} color={COLORS.deepPink} />
-                </View>
-                <View style={styles.eventCardCopy}>
-                  <Text style={styles.eventCardTitle}>{event.title}</Text>
-                  <Text style={styles.eventCardMeta}>{event.eventCode}</Text>
-                </View>
-                <View style={[
-                  styles.statusBadge,
-                  status === 'Open' ? styles.statusOpen : status === 'Upcoming' ? styles.statusUpcoming : styles.statusClosed,
-                ]}>
-                  <Text style={[
-                    styles.statusText,
-                    status === 'Open' ? styles.statusOpenText : status === 'Upcoming' ? styles.statusUpcomingText : styles.statusClosedText,
-                  ]}>{status}</Text>
-                </View>
-              </View>
-              <View style={styles.eventDetails}>
-                <Ionicons name="time-outline" size={15} color={COLORS.textSecondary} />
-                <Text style={styles.eventCardMeta}>
-                  {event.startTime ? formatDateTime(new Date(event.startTime)) : 'Time to be announced'}
-                </Text>
-                <View style={styles.attendanceCount}>
-                  <Ionicons name="people-outline" size={14} color={COLORS.deepPurple} />
-                  <Text style={styles.attendanceCountText}>{event.attendeeCount}</Text>
-                </View>
-              </View>
-              {event.venue ? (
-                <Text style={styles.eventCardMeta}>Venue: {event.venue}</Text>
-              ) : null}
-              {event.description ? (
-                <Text style={styles.eventCardMeta}>{event.description}</Text>
-              ) : null}
-              <View style={styles.eventActions}>
-                <Pressable
-                  style={styles.eventAction}
-                  onPress={() => handleEditEvent(event)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Edit ${event.title}`}
-                >
-                  <Ionicons name="create-outline" size={16} color={COLORS.deepPurple} />
-                  <Text style={styles.eventActionText}>Edit</Text>
-                </Pressable>
-                <Pressable
-                  style={styles.eventAction}
-                  onPress={() => setPayload(buildQRPayload({
-                    event: event.eventCode,
-                    title: event.title,
-                    start: event.startTime ?? undefined,
-                    end: event.endTime ?? undefined,
-                  }))}
-                  accessibilityRole="button"
-                >
-                  <Ionicons name="qr-code-outline" size={16} color={COLORS.deepPurple} />
-                  <Text style={styles.eventActionText}>Generate QR</Text>
-                </Pressable>
-                <Pressable
-                  style={styles.eventAction}
-                  onPress={() => router.push('/history')}
-                  accessibilityRole="button"
-                >
-                  <Ionicons name="people-outline" size={16} color={COLORS.deepPurple} />
-                  <Text style={styles.eventActionText}>View attendance</Text>
-                </Pressable>
-                {event.status !== 'closed' ? (
-                  <Pressable
-                    style={styles.eventAction}
-                    onPress={() => handleCloseEvent(event)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Close ${event.title}`}
-                  >
-                    <Ionicons name="close-circle-outline" size={16} color={COLORS.danger} />
-                    <Text style={[styles.eventActionText, { color: COLORS.danger }]}>Close</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-            </View>
-          );
-        })}
-      {teacherEvents.length === 0 ? (
-        <View style={styles.eventsEmpty}>
-          <Ionicons name="calendar-clear-outline" size={24} color={COLORS.primary} />
-          <Text style={styles.emptyTitle}>No events created yet</Text>
-          <Text style={styles.emptyCopy}>Create an event below to generate its attendance QR code.</Text>
-        </View>
-      ) : null}
-      <View style={styles.sectionHeader}>
-        <View>
-          <Text style={styles.sectionTitle}>{editingEventId ? 'Edit event' : 'Create an event'}</Text>
-          <Text style={styles.sectionSubtitle}>{editingEventId ? 'Update event information' : 'Generate a QR code for check-in'}</Text>
+          <Text style={styles.sectionTitle}>Create an event</Text>
+          <Text style={styles.sectionSubtitle}>Generate a QR code for check-in</Text>
         </View>
         <Ionicons name="add-circle-outline" size={21} color={COLORS.deepPurple} />
       </View>
@@ -530,11 +436,18 @@ export default function TeacherScreen() {
       <AppButton
         theme="primary"
         title={editingEventId ? 'Save Changes' : 'Create Event'}
-        icon={editingEventId ? 'checkmark-circle-outline' : 'add-circle-outline'}
+        icon="add-circle-outline"
         onPress={handleCreateEvent}
+        loading={saving}
+        disabled={saving}
       />
       {editingEventId ? (
-        <Pressable style={styles.cancelEditButton} onPress={cancelEdit}>
+        <Pressable
+          style={styles.cancelEditButton}
+          onPress={cancelEdit}
+          disabled={saving}
+          accessibilityRole="button"
+        >
           <Text style={styles.cancelEditText}>Cancel editing</Text>
         </Pressable>
       ) : null}
@@ -576,20 +489,112 @@ export default function TeacherScreen() {
           </Text>
         </View>
       )}
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>Manage events</Text>
+          <Text style={styles.sectionSubtitle}>
+            {teacherEvents.length} events created by you
+          </Text>
+        </View>
+        <Pressable
+          style={styles.refreshEvents}
+          accessibilityRole="button"
+          accessibilityLabel="Refresh your events"
+          disabled={eventsLoading}
+          onPress={() => user && loadTeacherEvents(user.id)}
+        >
+          {eventsLoading ? (
+            <ActivityIndicator size="small" color={COLORS.deepPurple} />
+          ) : (
+            <Ionicons name="refresh-outline" size={20} color={COLORS.deepPurple} />
+          )}
+        </Pressable>
+      </View>
+      {eventsLoading && teacherEvents.length === 0 ? (
+        <ActivityIndicator size="large" color={COLORS.primary} />
+      ) : teacherEvents.length === 0 ? (
+        <View style={styles.eventsEmpty}>
+          <Ionicons name="calendar-clear-outline" size={25} color={COLORS.primary} />
+          <Text style={styles.emptyTitle}>No events yet</Text>
+          <Text style={styles.emptyCopy}>Events you create will appear here for management.</Text>
+        </View>
+      ) : (
+        teacherEvents.map((event) => {
+          const now = Date.now();
+          const eventStatus = event.status === 'closed' ||
+            (event.end_time !== null && new Date(event.end_time).getTime() < now)
+            ? 'Closed'
+            : event.start_time !== null && new Date(event.start_time).getTime() > now
+              ? 'Upcoming'
+              : 'Open';
+          const badgeStyle = eventStatus === 'Open'
+            ? styles.statusOpen
+            : eventStatus === 'Upcoming'
+              ? styles.statusUpcoming
+              : styles.statusClosed;
+          const badgeTextStyle = eventStatus === 'Open'
+            ? styles.statusOpenText
+            : eventStatus === 'Upcoming'
+              ? styles.statusUpcomingText
+              : styles.statusClosedText;
+
+          return (
+            <View key={event.id} style={styles.eventCard}>
+              <View style={styles.eventCardTop}>
+                <View style={styles.eventGlyph}>
+                  <Ionicons name="calendar-outline" size={19} color={COLORS.deepPurple} />
+                </View>
+                <View style={styles.eventCardCopy}>
+                  <Text style={styles.eventCardTitle}>{event.title}</Text>
+                  <Text style={styles.eventCardMeta}>Code: {event.event_code}</Text>
+                </View>
+                <View style={[styles.statusBadge, badgeStyle]}>
+                  <Text style={[styles.statusText, badgeTextStyle]}>{eventStatus}</Text>
+                </View>
+              </View>
+              {event.start_time ? (
+                <View style={styles.eventDetails}>
+                  <Ionicons name="time-outline" size={15} color={COLORS.textSecondary} />
+                  <Text style={styles.eventCardMeta}>
+                    {formatDateTime(new Date(event.start_time))}
+                  </Text>
+                </View>
+              ) : null}
+              {event.venue ? (
+                <View style={styles.eventDetails}>
+                  <Ionicons name="location-outline" size={15} color={COLORS.textSecondary} />
+                  <Text style={styles.eventCardMeta}>{event.venue}</Text>
+                </View>
+              ) : null}
+              <View style={styles.eventActions}>
+                <Pressable
+                  style={styles.eventAction}
+                  onPress={() => handleEditEvent(event)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Edit ${event.title}`}
+                >
+                  <Ionicons name="create-outline" size={16} color={COLORS.deepPurple} />
+                  <Text style={styles.eventActionText}>Edit</Text>
+                </Pressable>
+                {event.status !== 'closed' ? (
+                  <Pressable
+                    style={styles.eventAction}
+                    onPress={() => handleCloseEvent(event)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Close ${event.title}`}
+                  >
+                    <Ionicons name="close-circle-outline" size={16} color={COLORS.danger} />
+                    <Text style={[styles.eventActionText, styles.closeActionText]}>Close event</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+          );
+        })
+      )}
       </ScrollView>
     </CampusBackground>
   );
-}
-
-function getEventStatus(event: TeacherEventAttendance): 'Open' | 'Upcoming' | 'Draft' | 'Closed' {
-  if (event.status === 'closed') return 'Closed';
-  if (event.status === 'draft') return 'Draft';
-  const now = Date.now();
-  const start = event.startTime ? new Date(event.startTime).getTime() : null;
-  const end = event.endTime ? new Date(event.endTime).getTime() : null;
-  if ((start === null || start <= now) && (end === null || end >= now)) return 'Open';
-  if (start !== null && start > now) return 'Upcoming';
-  return 'Closed';
 }
 
 type PickerFieldProps = {
@@ -865,6 +870,16 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     marginTop: 3,
   },
+  refreshEvents: {
+    width: 38,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 13,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
   sectionTitle: { color: COLORS.textPrimary, fontSize: 17, fontWeight: '800' },
   sectionSubtitle: { color: COLORS.textSecondary, fontSize: 11, marginTop: 3 },
   searchBox: {
@@ -911,6 +926,7 @@ const styles = StyleSheet.create({
   eventActions: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: COLORS.border, marginTop: 13, paddingTop: 12 },
   eventAction: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minHeight: 30 },
   eventActionText: { color: COLORS.deepPurple, fontSize: 11, fontWeight: '700', marginLeft: 5 },
+  closeActionText: { color: COLORS.danger },
   eventsEmpty: { backgroundColor: '#FFFFFF', borderRadius: 19, borderWidth: 1, borderColor: COLORS.border, padding: 20, alignItems: 'center', marginBottom: 20 },
   emptyTitle: { color: COLORS.textPrimary, fontSize: 14, fontWeight: '800', marginTop: 8 },
   emptyCopy: { color: COLORS.textSecondary, fontSize: 12, lineHeight: 18, textAlign: 'center', marginTop: 5 },

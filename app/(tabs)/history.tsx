@@ -145,18 +145,29 @@ export default function HistoryScreen() {
       <CampusBackground>
         <View style={styles.container}>
           <ScreenHeader
-            title="Attendance history"
-            subtitle={
-              role === 'admin'
-                ? 'Your events and student check-ins'
-                : 'Events and student check-ins'
-            }
+            title={role === 'teacher' ? ' Records' : 'History'}
+            subtitle={role === 'admin' ? 'Your events and student check-ins' : 'Attendance summaries and student check-ins'}
             icon="time-outline"
           />
 
           {liveUpdateError ? (
             <View style={styles.emptyCard}>
               <Text style={styles.subtitle}>{liveUpdateError}</Text>
+            </View>
+          ) : null}
+
+          {role === 'teacher' ? (
+            <View style={styles.summaryRow}>
+              <View style={styles.summaryCard}>
+                <Text style={styles.summaryValue}>{teacherEvents.length}</Text>
+                <Text style={styles.summaryLabel}>Events</Text>
+              </View>
+              <View style={styles.summaryCard}>
+                <Text style={styles.summaryValue}>
+                  {teacherEvents.reduce((total, event) => total + event.attendeeCount, 0)}
+                </Text>
+                <Text style={styles.summaryLabel}>Total check-ins</Text>
+              </View>
             </View>
           ) : null}
 
@@ -305,6 +316,32 @@ const styles = StyleSheet.create({
   list: {
     paddingBottom: 24,
     paddingHorizontal: 20,
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginHorizontal: 20,
+    marginBottom: 14,
+  },
+  summaryCard: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.card,
+  },
+  summaryValue: {
+    color: COLORS.deepPurple,
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  summaryLabel: {
+    color: COLORS.textSecondary,
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 4,
   },
   card: {
     backgroundColor: COLORS.card,

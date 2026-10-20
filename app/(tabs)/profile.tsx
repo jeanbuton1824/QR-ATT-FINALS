@@ -1,4 +1,5 @@
 
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect, useRouter } from 'expo-router';
 
 import { useCallback, useEffect, useState } from 'react';
@@ -28,6 +29,7 @@ import {
   type StudentDepartment,
   type StudentSex,
 } from '@/lib/profiles';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type StudentChoiceField = 'sex' | 'department' | 'course_year';
 
@@ -57,12 +59,15 @@ const PROFILE_NAME_BY_INITIAL: Record<string, string> = {
 
 function getProfileAvatarName(profile: Profile) {
   const fullName = profile.full_name?.trim();
-  const initial = (fullName || profile.email || '?').charAt(0).toUpperCase();
-  return PROFILE_NAME_BY_INITIAL[initial] || fullName || initial;
+  if (fullName && fullName.length === 1) {
+    return PROFILE_NAME_BY_INITIAL[fullName.toUpperCase()] || fullName;
+  }
+  return fullName || profile.email?.charAt(0).toUpperCase() || '?';
 }
 
 export default function ProfileScreen() {
   const { user, session } = useAuth();
+  const insets = useSafeAreaInsets();
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [draftName, setDraftName] = useState('');
@@ -89,62 +94,87 @@ export default function ProfileScreen() {
     }
   }, [session, router]);
 
-  const loadProfile = useCallback(async () => {
-    if (!user) return;
-
-    setProfileLoading(true);
-    setProfileLoadError(null);
-    try {
-      const p = await getProfile(user.id);
-      setProfile(p);
-      setDraftName(p?.full_name ?? '');
-      setStudentDraft({
-        full_name: p?.full_name ?? '',
-        sex: p?.sex ?? '',
-        department: p?.department ?? '',
-        course_year: p?.course_year ?? '',
-        block: p?.block ?? '',
-      });
-    } catch (error) {
-      setProfileLoadError(
-        error instanceof Error ? error.message : 'Unable to load your profile.'
-      );
-    } finally {
-      setProfileLoading(false);
-    }
-  }, [user]);
-
   useFocusEffect(
     useCallback(() => {
-      loadProfile();
-    }, [loadProfile])
+      let isActive = true;
+
+      const loadProfile = async () => {
+        if (!user) {
+          setProfileLoading(false);
+          return;
+        }
+
+        setProfileLoading(true);
+        setProfileLoadError(null);
+        try {
+          const nextProfile = await getProfile(user.id);
+          if (!isActive) return;
+
+          setProfile(nextProfile);
+          setDraftName(nextProfile?.full_name ?? '');
+          setStudentDraft({
+            full_name: nextProfile?.full_name ?? '',
+            sex: nextProfile?.sex ?? '',
+            department: nextProfile?.department ?? '',
+            course_year: nextProfile?.course_year ?? '',
+            block: nextProfile?.block ?? '',
+          });
+        } catch (error) {
+          if (isActive) {
+            setProfileLoadError(
+              error instanceof Error
+                ? error.message
+                : 'Unable to load your profile.'
+            );
+          }
+        } finally {
+          if (isActive) setProfileLoading(false);
+        }
+      };
+
+      void loadProfile();
+      return () => {
+        isActive = false;
+      };
+    }, [user])
   );
 
   const handleSaveName = async () => {
     if (!user) return;
 
+    const fullName = draftName.trim();
+    if (!fullName) {
+      Alert.alert('Missing name', 'Enter your full name before saving.');
+      return;
+    }
+
     setSaving(true);
+    try {
+      const { error } = await updateProfile(user.id, {
+        full_name: fullName,
+      });
+      if (error) {
+        Alert.alert('Error', error);
+        return;
+      }
 
-    const { error } = await updateProfile(user.id, {
-      full_name: draftName.trim(),
-    });
-
-    setSaving(false);
-
-    if (error) {
-      Alert.alert('Error', error);
-    } else {
       setProfile(
         (prev: Profile | null) =>
           prev
             ? {
                 ...prev,
-                full_name: draftName.trim(),
+                full_name: fullName,
               }
             : prev
       );
-
       setEditing(false);
+    } catch (error) {
+      Alert.alert(
+        'Error',
+        error instanceof Error ? error.message : 'Unable to save your name.'
+      );
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -168,33 +198,43 @@ export default function ProfileScreen() {
     }
 
     setSaving(true);
-    const { error } = await updateProfile(user.id, {
-      full_name: fullName,
-      sex,
-      department,
-      course_year: courseYear,
-      block,
-    });
-    setSaving(false);
+    try {
+      const { error } = await updateProfile(user.id, {
+        full_name: fullName,
+        sex,
+        department,
+        course_year: courseYear,
+        block,
+      });
 
-    if (error) {
-      Alert.alert('Error', error);
-      return;
+      if (error) {
+        Alert.alert('Error', error);
+        return;
+      }
+
+      setProfile((prev) =>
+        prev
+          ? {
+              ...prev,
+              full_name: fullName,
+              sex,
+              department,
+              course_year: courseYear,
+              block,
+            }
+          : prev
+      );
+      Alert.alert('Saved', 'Your student details have been updated.');
+    } catch (error) {
+      Alert.alert(
+        'Error',
+        error instanceof Error
+          ? error.message
+          : 'Unable to save your student details.'
+      );
+    } finally {
+      setSaving(false);
     }
-
-    setProfile((prev) =>
-      prev
-        ? {
-            ...prev,
-            full_name: fullName,
-            sex,
-            department,
-            course_year: courseYear,
-            block,
-          }
-        : prev
-    );
-    Alert.alert('Saved', 'Your student details have been updated.');
   };
 
   const chooseStudentOption = (option: string) => {
@@ -219,10 +259,10 @@ export default function ProfileScreen() {
 
     try {
       await signOut();
-    } catch (err: any) {
+    } catch (err) {
       Alert.alert(
         'Error',
-        err?.message || 'Failed to sign out.'
+        err instanceof Error ? err.message : 'Failed to sign out.'
       );
     } finally {
       setLoading(false);
@@ -232,7 +272,13 @@ export default function ProfileScreen() {
   return (
     <CampusBackground><View style={styles.container}>
       <ScreenHeader title="My profile" icon={null} large />
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: insets.bottom + 120 },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
 
       {profileLoadError ? (
         <View style={styles.infoCard}>
@@ -250,7 +296,12 @@ export default function ProfileScreen() {
           </Text>
         </View>
       ) : (
-        <View style={styles.infoCard}>
+        <View
+          style={[
+            styles.infoCard,
+            profile.role !== 'student' && styles.accountInfoCard,
+          ]}
+        >
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>
               {getProfileAvatarName(profile)}
@@ -304,9 +355,11 @@ export default function ProfileScreen() {
           </Text>
           {profile.role === 'student' ? (
             <View style={styles.studentDetails}>
-              <Text style={styles.sectionTitle}>Student Info</Text>
+              <Text style={[styles.sectionTitle, styles.centeredProfileText]}>
+                Personal Info
+              </Text>
 
-              <Text style={styles.label}>Full Name</Text>
+              <Text style={[styles.label, styles.centeredProfileText]}>Full Name</Text>
               <TextInput
                 style={styles.studentInput}
                 value={studentDraft.full_name}
@@ -320,7 +373,7 @@ export default function ProfileScreen() {
 
               {(['sex', 'department', 'course_year'] as const).map((field) => (
                 <View key={field}>
-                  <Text style={styles.label}>
+                  <Text style={[styles.label, styles.centeredProfileText]}>
                     {STUDENT_CHOICE_LABELS[field]}
                   </Text>
                   <Pressable
@@ -337,12 +390,18 @@ export default function ProfileScreen() {
                     >
                       {studentDraft[field] || STUDENT_CHOICE_PLACEHOLDERS[field]}
                     </Text>
-                    <Text style={styles.choiceChevron}>⌄</Text>
+                    <View style={styles.choiceChevronWrap}>
+                      <Ionicons
+                        name="chevron-down"
+                        size={14}
+                        color={COLORS.deepPurple}
+                      />
+                    </View>
                   </Pressable>
                 </View>
               ))}
 
-              <Text style={styles.label}>Block</Text>
+              <Text style={[styles.label, styles.centeredProfileText]}>Block</Text>
               <TextInput
                 style={styles.studentInput}
                 value={studentDraft.block}
@@ -425,12 +484,14 @@ export default function ProfileScreen() {
         </View>
       )}
 
-      <AppButton
-        title="Sign Out"
-        icon="log-out-outline"
-        onPress={handleSignOut}
-        disabled={loading}
-      />
+      <View style={styles.signOutButton}>
+        <AppButton
+          title="Sign Out"
+          icon="log-out-outline"
+          onPress={handleSignOut}
+          disabled={loading}
+        />
+      </View>
       </ScrollView>
       <Modal
         transparent
@@ -474,6 +535,11 @@ const styles = StyleSheet.create({
     paddingTop: 20,
     paddingBottom: 24,
   },
+  signOutButton: {
+    width: '78%',
+    maxWidth: 360,
+    alignSelf: 'center',
+  },
 
   title: {
     fontSize: 20,
@@ -489,12 +555,16 @@ const styles = StyleSheet.create({
   },
 
   infoCard: {
-    backgroundColor: COLORS.card,
+    backgroundColor: 'transparent',
     borderRadius: 22,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    borderWidth: 0,
     padding: 20,
     marginBottom: 24,
+  },
+  accountInfoCard: {
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderColor: COLORS.border,
     shadowColor: COLORS.shadow,
     shadowOpacity: 0.09,
     shadowRadius: 14,
@@ -580,7 +650,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: COLORS.surface,
+    backgroundColor: 'transparent',
     borderRadius: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -601,7 +671,7 @@ const styles = StyleSheet.create({
 
   input: {
     flex: 1,
-    backgroundColor: COLORS.surface,
+    backgroundColor: 'transparent',
     borderRadius: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -629,17 +699,27 @@ const styles = StyleSheet.create({
   },
 
   studentDetails: {
-    marginTop: 12,
-    paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
+    width: '100%',
+    maxWidth: 440,
+    alignSelf: 'center',
+    marginTop: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 20,
+    backgroundColor: COLORS.card,
+    shadowColor: COLORS.shadow,
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 1,
   },
 
   sectionTitle: {
     fontSize: 16,
     fontWeight: '700',
     color: COLORS.textPrimary,
-    marginBottom: 4,
+    marginBottom: 10,
   },
 
   accountDetails: {
@@ -656,6 +736,7 @@ const styles = StyleSheet.create({
   },
 
   studentInput: {
+    minHeight: 46,
     backgroundColor: COLORS.surface,
     borderRadius: 14,
     borderWidth: 1,
@@ -663,33 +744,47 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 11,
     fontSize: 15,
+    fontWeight: '700',
     color: COLORS.textPrimary,
+    textAlign: 'center',
   },
 
   choiceButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: COLORS.surface,
+    justifyContent: 'center',
+    position: 'relative',
+    minHeight: 48,
+    backgroundColor: '#FFFFFF',
     borderRadius: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
+    paddingHorizontal: 38,
+    paddingVertical: 10,
   },
 
   choiceValue: {
+    flex: 1,
     fontSize: 15,
+    fontWeight: '700',
     color: COLORS.textPrimary,
+    textAlign: 'center',
   },
 
   placeholderValue: {
+    fontWeight: '500',
     color: COLORS.textSecondary,
   },
 
-  choiceChevron: {
-    fontSize: 18,
-    color: COLORS.textSecondary,
+  choiceChevronWrap: {
+    position: 'absolute',
+    right: 10,
+    width: 26,
+    height: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 9,
+    backgroundColor: COLORS.softPink,
   },
 
   detailsSaveButton: {
@@ -697,6 +792,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 46,
     marginTop: 20,
+    alignSelf: 'center',
+    width: '72%',
     paddingHorizontal: 16,
     borderRadius: 14,
     backgroundColor: COLORS.deepPurple,
