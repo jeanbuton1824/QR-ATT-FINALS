@@ -172,7 +172,7 @@ export default function ScanScreen() {
 
       <LinearGradient
         colors={['rgba(49,33,63,0.72)', 'rgba(49,33,63,0.08)']}
-        style={[styles.topOverlay, { paddingTop: insets.top + 18 }]}
+        style={[styles.topOverlay, { paddingTop: insets.top + 8 }]}
       >
         <Text style={styles.brand}>QR-ATT</Text>
         <Text style={styles.title}>Scan to check in</Text>
@@ -232,7 +232,7 @@ export default function ScanScreen() {
           ) : null}
         </View>
       ) : (
-        <View style={styles.bottomTip}>
+        <View style={[styles.bottomTip, { bottom: insets.bottom + 96 }]}>
           <Ionicons name="scan-outline" size={18} color="#FFFFFF" />
           <Text style={styles.tipText}>Hold steady while the code is detected</Text>
         </View>
@@ -295,7 +295,6 @@ const styles = StyleSheet.create({
   torchLabel: { color: '#FFFFFF', fontSize: 10, fontWeight: '700', marginTop: 4 },
   bottomTip: {
     position: 'absolute',
-    bottom: 34,
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',

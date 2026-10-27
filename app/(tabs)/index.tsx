@@ -17,7 +17,13 @@ import AppButton from '@/components/AppButton';
 import CampusBackground from '@/components/CampusBackground';
 import { COLORS } from '@/constants/colors';
 import { useAuth } from '@/lib/auth';
-import { getAttendanceHistory, type AttendanceRecord } from '@/lib/attendance';
+import { getAdminDashboardData, type AdminDashboardData } from '@/lib/admin';
+import {
+  getAttendanceHistory,
+  getTeacherEventAttendance,
+  type AttendanceRecord,
+  type TeacherEventAttendance,
+} from '@/lib/attendance';
 import { getUpcomingEvents, type CloudEvent } from '@/lib/events';
 import { getProfile, type Role } from '@/lib/profiles';
 
@@ -25,12 +31,26 @@ type DashboardSelection =
   | { kind: 'event'; item: CloudEvent }
   | { kind: 'attendance'; item: AttendanceRecord };
 
+type ManagedEventDetails = {
+  key: string;
+  title: string;
+  eventCode: string;
+  status: string;
+  startTime: string | null;
+  endTime: string | null;
+  venue: string | null;
+  description: string | null;
+  meta: string;
+};
+
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const [name, setName] = useState('');
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [events, setEvents] = useState<CloudEvent[]>([]);
+  const [teacherEvents, setTeacherEvents] = useState<TeacherEventAttendance[]>([]);
+  const [adminData, setAdminData] = useState<AdminDashboardData | null>(null);
   const [role, setRole] = useState<Role | null>(null);
   const [loading, setLoading] = useState(true);
   const [eventsError, setEventsError] = useState(false);
@@ -45,19 +65,41 @@ export default function HomeScreen() {
     setLoading(true);
     setDashboardError(null);
     try {
-      const [profile, history, upcomingEvents] = await Promise.all([
-        getProfile(user.id),
-        getAttendanceHistory(user.id),
-        getUpcomingEvents(),
-      ]);
+      const profile = await getProfile(user.id);
       setRole(profile?.role ?? null);
       setName(profile?.full_name?.trim() || 'there');
-      setRecords(history);
-      setEvents(upcomingEvents);
-      setEventsError(false);
+
+      if (profile?.role === 'teacher') {
+        setTeacherEvents(await getTeacherEventAttendance(user.id));
+        setAdminData(null);
+        setRecords([]);
+        setEvents([]);
+      } else if (profile?.role === 'admin') {
+        setAdminData(await getAdminDashboardData());
+        setTeacherEvents([]);
+        setRecords([]);
+        setEvents([]);
+      } else if (profile?.role === 'student') {
+        const [history, upcomingEvents] = await Promise.all([
+          getAttendanceHistory(user.id),
+          getUpcomingEvents(),
+        ]);
+        setRecords(history);
+        setEvents(upcomingEvents);
+        setTeacherEvents([]);
+        setAdminData(null);
+        setEventsError(false);
+      } else {
+        setRecords([]);
+        setEvents([]);
+        setTeacherEvents([]);
+        setAdminData(null);
+      }
     } catch (error) {
       setEvents([]);
       setRecords([]);
+      setTeacherEvents([]);
+      setAdminData(null);
       setEventsError(true);
       setDashboardError(
         error instanceof Error ? error.message : 'Unable to load dashboard data.'
@@ -72,6 +114,64 @@ export default function HomeScreen() {
       loadDashboard();
     }, [loadDashboard])
   );
+
+  if (role === null) {
+    return (
+      <CampusBackground>
+        <SafeAreaView style={styles.safeArea} edges={['top']}>
+          <View style={styles.roleLoading}>
+            {loading ? (
+              <ActivityIndicator size="large" color={COLORS.primary} />
+            ) : (
+              <Ionicons
+                name="alert-circle-outline"
+                size={34}
+                color={COLORS.danger}
+              />
+            )}
+            <Text style={styles.roleLoadingTitle}>
+              {loading ? 'Loading your dashboard...' : 'Account role unavailable'}
+            </Text>
+            <Text style={styles.roleLoadingText}>
+              {loading
+                ? 'Please wait while we verify your account.'
+                : dashboardError || 'Ask an administrator to verify your account role.'}
+            </Text>
+          </View>
+        </SafeAreaView>
+      </CampusBackground>
+    );
+  }
+
+  if (role === 'teacher') {
+    return (
+      <RoleDashboard
+        role="teacher"
+        name={name}
+        loading={loading}
+        error={dashboardError}
+        events={teacherEvents}
+        onProfile={() => router.push('/profile')}
+        onPrimaryAction={() => router.push('/teacher')}
+        onSecondaryAction={() => router.push('/history')}
+      />
+    );
+  }
+
+  if (role === 'admin') {
+    return (
+      <RoleDashboard
+        role="admin"
+        name={name}
+        loading={loading}
+        error={dashboardError}
+        adminData={adminData}
+        onProfile={() => router.push('/profile')}
+        onPrimaryAction={() => router.push('/admin')}
+        onSecondaryAction={() => router.push('/events')}
+      />
+    );
+  }
 
   return (
     <CampusBackground>
@@ -341,6 +441,374 @@ export default function HomeScreen() {
   );
 }
 
+function RoleDashboard({
+  role,
+  name,
+  loading,
+  error,
+  events,
+  adminData,
+  onProfile,
+  onPrimaryAction,
+  onSecondaryAction,
+}: {
+  role: 'teacher' | 'admin';
+  name: string;
+  loading: boolean;
+  error: string | null;
+  events?: TeacherEventAttendance[];
+  adminData?: AdminDashboardData | null;
+  onProfile: () => void;
+  onPrimaryAction: () => void;
+  onSecondaryAction: () => void;
+}) {
+  const [selectedEvent, setSelectedEvent] = useState<ManagedEventDetails | null>(null);
+  const isTeacher = role === 'teacher';
+  const teacherEvents = events ?? [];
+  const eventItems = isTeacher
+    ? teacherEvents.slice(0, 4).map((event) => ({
+        key: event.eventId,
+        title: event.title,
+        eventCode: event.eventCode,
+        status: event.status,
+        startTime: event.startTime,
+        endTime: event.endTime,
+        venue: event.venue,
+        description: event.description,
+        meta: `${event.attendeeCount} student check-in${event.attendeeCount === 1 ? '' : 's'}`,
+      }))
+    : (adminData?.events ?? []).slice(0, 4).map((event) => ({
+        key: event.id,
+        title: event.title,
+        eventCode: event.event_code,
+        status: event.status,
+        startTime: event.start_time,
+        endTime: event.end_time,
+        venue: event.venue,
+        description: event.description,
+        meta: event.venue || 'Venue not set',
+      }));
+  const metrics = isTeacher
+    ? [
+        { label: 'My events', value: teacherEvents.length, icon: 'calendar-outline' as const },
+        {
+          label: 'Open now',
+          value: teacherEvents.filter((event) => event.status === 'open').length,
+          icon: 'radio-button-on-outline' as const,
+        },
+        {
+          label: 'Check-ins',
+          value: teacherEvents.reduce((total, event) => total + event.attendeeCount, 0),
+          icon: 'people-outline' as const,
+        },
+      ]
+    : [
+        { label: 'Users', value: adminData?.totals.users ?? 0, icon: 'people-outline' as const },
+        { label: 'Events', value: adminData?.totals.events ?? 0, icon: 'calendar-outline' as const },
+        {
+          label: 'Check-ins',
+          value: adminData?.totals.attendance ?? 0,
+          icon: 'checkmark-done-outline' as const,
+        },
+      ];
+
+  return (
+    <CampusBackground>
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <ScrollView
+          style={styles.container}
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+        >
+          <LinearGradient
+            colors={['#B86ACD', '#815BC7']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.hero}
+          >
+            <View style={styles.heroTop}>
+              <View style={styles.heroCopy}>
+                <Text style={styles.eyebrow}>
+                  {isTeacher ? 'TEACHER DASHBOARD' : 'ADMIN DASHBOARD'}
+                </Text>
+                <Text style={styles.greeting}>Hello!</Text>
+                <Text style={styles.name} numberOfLines={1} adjustsFontSizeToFit>
+                  {name}
+                </Text>
+                <Text style={styles.heroSubtitle}>
+                  {isTeacher
+                    ? 'Your events and student attendance.'
+                    : 'System activity and campus-wide attendance.'}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Open profile"
+                onPress={onProfile}
+                style={styles.avatar}
+              >
+                <Text style={styles.avatarText}>
+                  {name === 'there' ? '?' : name.charAt(0).toUpperCase()}
+                </Text>
+                <View style={styles.avatarIndicator} />
+              </Pressable>
+            </View>
+            <View style={styles.heroBottom}>
+              <Ionicons
+                name={isTeacher ? 'briefcase-outline' : 'analytics-outline'}
+                size={16}
+                color="#FFE6F4"
+              />
+              <Text style={styles.heroFootnote}>
+                {isTeacher
+                  ? 'Keep your events and check-ins on track.'
+                  : 'Monitor users, events, and attendance.'}
+              </Text>
+            </View>
+          </LinearGradient>
+
+          <View style={styles.body}>
+            <View style={styles.sectionHeading}>
+              <View>
+                <Text style={styles.sectionTitle}>
+                  {isTeacher ? 'Your teaching overview' : 'System overview'}
+                </Text>
+                <Text style={styles.sectionSubtitle}>
+                  {isTeacher ? 'Activity from your events' : 'Campus-wide totals'}
+                </Text>
+              </View>
+              <View style={styles.sectionIcon}>
+                <Ionicons
+                  name={isTeacher ? 'briefcase-outline' : 'analytics-outline'}
+                  size={19}
+                  color={COLORS.deepPurple}
+                />
+              </View>
+            </View>
+
+            {error ? (
+              <View style={styles.dashboardError}>
+                <Ionicons name="alert-circle-outline" size={18} color={COLORS.danger} />
+                <Text style={styles.dashboardErrorText}>{error}</Text>
+              </View>
+            ) : null}
+
+            <View style={styles.roleMetrics}>
+              {metrics.map((metric) => (
+                <View key={metric.label} style={styles.roleMetricCard}>
+                  <View style={styles.roleMetricIcon}>
+                    <Ionicons name={metric.icon} size={18} color={COLORS.deepPurple} />
+                  </View>
+                  <Text style={styles.roleMetricValue}>
+                    {loading ? '—' : metric.value.toLocaleString()}
+                  </Text>
+                  <Text style={styles.roleMetricLabel}>{metric.label}</Text>
+                </View>
+              ))}
+            </View>
+
+            {!isTeacher && adminData ? (
+              <View style={styles.roleBreakdown}>
+                <RoleCount label="Students" value={adminData.totals.students} />
+                <RoleCount label="Teachers" value={adminData.totals.teachers} />
+                <RoleCount label="Admins" value={adminData.totals.admins} />
+              </View>
+            ) : null}
+
+            <View style={styles.roleActions}>
+              <RoleAction
+                title={isTeacher ? 'Manage my events' : 'Users & reports'}
+                subtitle={
+                  isTeacher
+                    ? 'Create and manage your events'
+                    : 'Manage accounts and attendance'
+                }
+                icon={isTeacher ? 'calendar-outline' : 'shield-checkmark-outline'}
+                onPress={onPrimaryAction}
+              />
+              <RoleAction
+                title={isTeacher ? 'Attendance' : 'Manage events'}
+                subtitle={
+                  isTeacher
+                    ? 'Review student check-ins'
+                    : 'Review campus events'
+                }
+                icon={isTeacher ? 'list-outline' : 'calendar-outline'}
+                onPress={onSecondaryAction}
+              />
+            </View>
+
+            <View style={styles.sectionHeading}>
+              <View>
+                <Text style={styles.sectionTitle}>
+                  {isTeacher ? 'My recent events' : 'Recent events'}
+                </Text>
+                <Text style={styles.sectionSubtitle}>
+                  {isTeacher
+                    ? 'Check-in totals for your events'
+                    : 'Latest activity across campus'}
+                </Text>
+              </View>
+              <Pressable onPress={onSecondaryAction} accessibilityRole="button">
+                <Text style={styles.seeAll}>{isTeacher ? 'Manage' : 'View all'}</Text>
+              </Pressable>
+            </View>
+
+            {loading ? (
+              <View style={styles.emptyCard}>
+                <ActivityIndicator color={COLORS.primary} />
+                <Text style={styles.emptyText}>Loading dashboard data...</Text>
+              </View>
+            ) : eventItems.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Text style={styles.emptyTitle}>
+                  {isTeacher ? 'No events yet' : 'No events to show'}
+                </Text>
+                <Text style={styles.emptyText}>
+                  {isTeacher
+                    ? 'Create an event to start collecting student attendance.'
+                    : 'Campus events will appear here once they are created.'}
+                </Text>
+              </View>
+            ) : (
+              eventItems.map((event) => (
+                <View key={event.key} style={styles.eventCard}>
+                  <View style={styles.eventIcon}>
+                    <Ionicons name="calendar" size={20} color={COLORS.deepPurple} />
+                  </View>
+                  <View style={styles.eventCopy}>
+                    <Text style={styles.eventTitle}>{event.title}</Text>
+                    <Text style={styles.eventMeta}>{event.meta}</Text>
+                  </View>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.openDetailButton,
+                      pressed && styles.openDetailButtonPressed,
+                    ]}
+                    onPress={() => setSelectedEvent(event)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open details for ${event.title}`}
+                    hitSlop={8}
+                  >
+                    <Ionicons
+                      name="open-outline"
+                      size={20}
+                      color={COLORS.deepPurple}
+                    />
+                  </Pressable>
+                </View>
+              ))
+            )}
+          </View>
+        </ScrollView>
+        <Modal
+          visible={selectedEvent !== null}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setSelectedEvent(null)}
+        >
+          <View style={styles.modalOverlay}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={() => setSelectedEvent(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Close event details"
+            />
+            {selectedEvent ? (
+              <View style={styles.detailCard}>
+                <Pressable
+                  style={styles.closeButton}
+                  onPress={() => setSelectedEvent(null)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close event details"
+                >
+                  <Ionicons name="close" size={22} color={COLORS.textSecondary} />
+                </Pressable>
+                <View style={styles.detailIcon}>
+                  <Ionicons name="calendar" size={22} color={COLORS.deepPurple} />
+                </View>
+                <Text style={styles.detailTitle}>{selectedEvent.title}</Text>
+                <Text style={styles.detailLabel}>Event code</Text>
+                <Text style={styles.detailValue}>{selectedEvent.eventCode}</Text>
+                <Text style={styles.detailLabel}>Status</Text>
+                <Text style={styles.detailValue}>
+                  {selectedEvent.status.charAt(0).toUpperCase() +
+                    selectedEvent.status.slice(1)}
+                </Text>
+                {selectedEvent.startTime ? (
+                  <>
+                    <Text style={styles.detailLabel}>Starts</Text>
+                    <Text style={styles.detailValue}>
+                      {formatDate(selectedEvent.startTime)}
+                    </Text>
+                  </>
+                ) : null}
+                {selectedEvent.endTime ? (
+                  <>
+                    <Text style={styles.detailLabel}>Ends</Text>
+                    <Text style={styles.detailValue}>
+                      {formatDate(selectedEvent.endTime)}
+                    </Text>
+                  </>
+                ) : null}
+                {selectedEvent.venue ? (
+                  <>
+                    <Text style={styles.detailLabel}>Venue</Text>
+                    <Text style={styles.detailValue}>{selectedEvent.venue}</Text>
+                  </>
+                ) : null}
+                {selectedEvent.description ? (
+                  <>
+                    <Text style={styles.detailLabel}>Description</Text>
+                    <Text style={styles.detailValue}>
+                      {selectedEvent.description}
+                    </Text>
+                  </>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+        </Modal>
+      </SafeAreaView>
+    </CampusBackground>
+  );
+}
+
+function RoleAction({
+  title,
+  subtitle,
+  icon,
+  onPress,
+}: {
+  title: string;
+  subtitle: string;
+  icon: 'calendar-outline' | 'shield-checkmark-outline' | 'list-outline';
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      style={styles.roleAction}
+      onPress={onPress}
+      accessibilityRole="button"
+    >
+      <View style={styles.roleActionIcon}>
+        <Ionicons name={icon} size={19} color={COLORS.deepPurple} />
+      </View>
+      <Text style={styles.roleActionTitle}>{title}</Text>
+      <Text style={styles.roleActionSubtitle}>{subtitle}</Text>
+    </Pressable>
+  );
+}
+
+function RoleCount({ label, value }: { label: string; value: number }) {
+  return (
+    <View style={styles.roleCount}>
+      <Text style={styles.roleCountValue}>{value.toLocaleString()}</Text>
+      <Text style={styles.roleCountLabel}>{label}</Text>
+    </View>
+  );
+}
+
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString(undefined, {
     month: 'short',
@@ -352,6 +820,26 @@ function formatDate(iso: string) {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: 'transparent' },
+  roleLoading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+  },
+  roleLoadingTitle: {
+    color: COLORS.textPrimary,
+    fontSize: 17,
+    fontWeight: '800',
+    marginTop: 14,
+    textAlign: 'center',
+  },
+  roleLoadingText: {
+    color: COLORS.textSecondary,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 6,
+    textAlign: 'center',
+  },
   container: { flex: 1, backgroundColor: 'transparent' },
   content: { paddingBottom: 24 },
   hero: {
@@ -515,6 +1003,106 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
   },
   recordIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: '#E8F7ED', alignItems: 'center', justifyContent: 'center', marginRight: 11 },
+  roleMetrics: { flexDirection: 'row', marginHorizontal: -4 },
+  roleMetricCard: {
+    flex: 1,
+    minHeight: 120,
+    marginHorizontal: 4,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  roleMetricIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 11,
+    backgroundColor: COLORS.lavender,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  roleMetricValue: {
+    color: COLORS.textPrimary,
+    fontSize: 20,
+    fontWeight: '800',
+    marginTop: 10,
+  },
+  roleMetricLabel: {
+    color: COLORS.textSecondary,
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  roleBreakdown: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 17,
+    marginTop: 10,
+    paddingVertical: 13,
+  },
+  roleCount: { flex: 1, alignItems: 'center' },
+  roleCountValue: { color: COLORS.textPrimary, fontSize: 17, fontWeight: '800' },
+  roleCountLabel: { color: COLORS.textSecondary, fontSize: 11, marginTop: 3 },
+  roleActions: { flexDirection: 'row', marginHorizontal: -5, marginTop: 14 },
+  roleAction: {
+    flex: 1,
+    minHeight: 135,
+    marginHorizontal: 5,
+    padding: 13,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  roleActionIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: COLORS.softPink,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  roleActionTitle: { color: COLORS.textPrimary, fontSize: 13, fontWeight: '800' },
+  roleActionSubtitle: {
+    color: COLORS.textSecondary,
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 4,
+  },
+  openDetailButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    marginLeft: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.softPink,
+  },
+  openDetailButtonPressed: {
+    opacity: 0.65,
+    transform: [{ scale: 0.94 }],
+  },
+  dashboardError: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF1F2',
+    borderWidth: 1,
+    borderColor: '#F2C9CE',
+    padding: 12,
+    borderRadius: 14,
+    marginBottom: 12,
+  },
+  dashboardErrorText: {
+    flex: 1,
+    color: COLORS.danger,
+    fontSize: 12,
+    lineHeight: 18,
+    marginLeft: 8,
+  },
   modalOverlay: {
     flex: 1,
     justifyContent: 'center',
